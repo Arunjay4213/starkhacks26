@@ -1,6 +1,12 @@
 """
-Shared types for the Sinew project.
-All modules import from here. Never define these elsewhere.
+app/state.py
+
+Shared types for the Sinew stack. Every layer imports from here so that
+enum values cannot drift between the firmware grammar, the hardware bridge,
+the brain, and the vision and voice layers.
+
+The string values of Finger and Action match the Arduino firmware's command
+grammar exactly. Changing them breaks the wire protocol. Do not lowercase.
 """
 from __future__ import annotations
 
@@ -22,10 +28,10 @@ class Action(str, Enum):
 
 
 class GripType(str, Enum):
-    CYLINDRICAL = "CYLINDRICAL"  # index + middle + pinky ON
-    PINCH = "PINCH"              # index + middle ON, pinky OFF
-    LATERAL = "LATERAL"          # middle + pinky ON, index OFF
-    NONE = "NONE"
+    CYLINDRICAL = "cylindrical"  # index + middle + pinky ON
+    PINCH = "pinch"              # index + middle ON, pinky OFF
+    LATERAL = "lateral"          # middle + pinky ON, index OFF
+    NONE = "none"
 
 
 class Confidence(str, Enum):
@@ -35,11 +41,12 @@ class Confidence(str, Enum):
 
 
 class SystemState(str, Enum):
-    IDLE = "IDLE"
-    CAPTURING = "CAPTURING"
-    PROCESSING = "PROCESSING"
-    ACKNOWLEDGING = "ACKNOWLEDGING"
-    EXECUTING = "EXECUTING"
+    IDLE = "idle"
+    LISTENING = "listening"
+    CAPTURING = "capturing"
+    PROCESSING = "processing"
+    ACKNOWLEDGING = "acknowledging"
+    EXECUTING = "executing"
 
 
 @dataclass
