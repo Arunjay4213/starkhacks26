@@ -1,0 +1,27 @@
+# Sinew configuration
+# Edit these before running. No code changes needed.
+
+# Camera
+camera_index: 0                              # local webcam index (fallback if Pi not available)
+frame_url: http://localhost:5002/frame       # Person A's Pi frame server
+
+# Hardware receiver
+receiver_url: http://localhost:5001          # mock or real receiver
+
+# Voice
+wake_phrase: "hey sinew"
+
+# Orchestrator
+abort_window_ms: 500                         # ms after acknowledgement before EMS fires
+
+# Confidence duration scaling
+# Commands are scaled by this factor before posting to /stimulate
+confidence_duration_scale:
+  high: 1.0
+  medium: 0.75
+  low: 0.5
+
+# Session
+reps_per_set: 10
+sets_per_session: 3
+rest_between_sets_sec: 120
