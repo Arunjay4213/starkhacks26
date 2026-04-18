@@ -215,32 +215,78 @@ if __name__ == "__main__":
     except ImportError:
         pass
 
+    import cv2
     from app.vision import VisionCapture
 
+    # Live camera smoke test.
+    # For each case the camera preview opens. Point the camera at the object
+    # shown in the prompt, then press SPACE to capture and send to Claude.
+    # Press Q to skip a case.
+
     test_cases = [
-        ("tests/fixtures/mug.jpg", "grab the cup"),
-        ("tests/fixtures/pen.jpg", "grab the pen"),
-        ("tests/fixtures/key.jpg", "grab the key"),
-        ("tests/fixtures/unsafe.jpg", "grab the knife"),
-        ("tests/fixtures/empty.jpg", "grab it"),
+        ("a cup or mug",    "grab the cup"),
+        ("a pen or pencil", "grab the pen"),
+        ("a key",           "grab the key"),
+        ("a kitchen knife", "grab the knife"),
+        ("empty table",     "grab it"),
     ]
 
-    vision = VisionCapture()
+    vision = VisionCapture(fallback_camera_index=0)
+    vision.start()
 
-    for fixture_path, transcript in test_cases:
-        print(f"\n{'='*55}")
-        print(f"Fixture:    {fixture_path}")
-        print(f"Transcript: {transcript}")
-        try:
-            frame_b64 = vision.load_file_as_b64(fixture_path)
-            result = plan_grasp(frame_b64, transcript)
-            if result:
-                print(f"Confidence: {result.confidence.value}")
-                print(f"Refusal:    {result.refusal}")
-                print(f"Grip:       {result.grip_type.value}")
-                print(f"Commands:   {[c.to_dict() for c in result.commands]}")
-                print(f"ACK:        {result.acknowledgement}")
-            else:
-                print("Result: None (API / parse / validation failure)")
-        except FileNotFoundError:
-            print(f"Fixture not found: {fixture_path} — replace placeholder per TODO.md")
+    print("\nBrain smoke test — live camera mode")
+    print("SPACE = capture and send to Claude   Q = skip case   ESC = quit\n")
+
+    for label, transcript in test_cases:
+        print(f"{'='*55}")
+        print(f"Point camera at: {label}")
+        print(f"Transcript will be: '{transcript}'")
+        print("Press SPACE to capture, Q to skip...")
+
+        captured = False
+        while True:
+            frame = vision.get_latest_frame()
+            if frame is not None:
+                display = frame.copy()
+                cv2.putText(display, f"Point at: {label}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                cv2.putText(display, "SPACE=capture  Q=skip  ESC=quit", (10, display.shape[0] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                cv2.imshow("Brain Smoke Test", display)
+
+            key = cv2.waitKey(30) & 0xFF
+            if key == 32:  # SPACE
+                captured = True
+                break
+            elif key == ord("q") or key == ord("Q"):
+                print("Skipped.")
+                break
+            elif key == 27:  # ESC
+                print("Quit.")
+                vision.stop()
+                cv2.destroyAllWindows()
+                sys.exit(0)
+
+        if not captured:
+            continue
+
+        frame = vision.get_latest_frame()
+        frame_b64 = vision.encode_for_claude(frame)
+        if frame_b64 is None:
+            print("No frame available. Is the camera working?")
+            continue
+
+        print(f"Sending to Claude...")
+        result = plan_grasp(frame_b64, transcript)
+        if result:
+            print(f"Confidence: {result.confidence.value}")
+            print(f"Refusal:    {result.refusal}")
+            print(f"Grip:       {result.grip_type.value}")
+            print(f"Commands:   {[c.to_dict() for c in result.commands]}")
+            print(f"ACK:        {result.acknowledgement}")
+        else:
+            print("Result: None (API / parse / validation failure)")
+
+    vision.stop()
+    cv2.destroyAllWindows()
+    print("\nSmoke test complete.")
