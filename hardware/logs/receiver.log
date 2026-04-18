@@ -1,0 +1,39 @@
+2026-04-17 22:05:02,987 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 800, 'finger': 'INDEX'}
+2026-04-17 22:05:03,188 INFO sinew.receiver GET /status -> {'connected': True, 'last_ack': 'OK:FINGER:INDEX:ON', 'watchdog_remaining_ms': 2810}
+2026-04-17 22:05:03,812 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:INDEX:OFF'
+2026-04-17 22:05:04,198 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 300, 'finger': 'PINKY'}
+2026-04-17 22:05:04,524 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:PINKY:OFF'
+2026-04-17 22:05:04,818 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 1000, 'finger': 'INDEX'}
+2026-04-17 22:05:04,922 INFO sinew.receiver POST /stop
+2026-04-17 22:05:04,934 INFO sinew.receiver pulse tail for INDEX aborted during sleep
+2026-04-17 22:05:05,237 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'finger': 'THUMB'}
+2026-04-17 22:05:05,249 INFO sinew.receiver POST /stimulate body={'action': 'FIRE', 'finger': 'INDEX'}
+2026-04-17 22:05:05,257 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 9999, 'finger': 'MIDDLE'}
+2026-04-17 22:05:05,257 WARNING sinew.receiver duration_ms 9999 capped to 1000
+2026-04-17 22:05:06,299 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:MIDDLE:OFF'
+2026-04-17 22:11:35,378 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 800, 'finger': 'INDEX'}
+2026-04-17 22:11:35,580 INFO sinew.receiver GET /status -> {'connected': True, 'last_ack': 'OK:FINGER:INDEX:ON', 'watchdog_remaining_ms': 2809}
+2026-04-17 22:11:36,200 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:INDEX:OFF'
+2026-04-17 22:11:36,586 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 300, 'finger': 'PINKY'}
+2026-04-17 22:11:36,908 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:PINKY:OFF'
+2026-04-17 22:11:37,203 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 1000, 'finger': 'INDEX'}
+2026-04-17 22:11:37,304 INFO sinew.receiver POST /stop
+2026-04-17 22:11:37,315 INFO sinew.receiver pulse tail for INDEX aborted during sleep
+2026-04-17 22:11:37,609 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'finger': 'THUMB'}
+2026-04-17 22:11:37,612 INFO sinew.receiver POST /stimulate body={'action': 'FIRE', 'finger': 'INDEX'}
+2026-04-17 22:11:37,614 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 9999, 'finger': 'MIDDLE'}
+2026-04-17 22:11:37,614 WARNING sinew.receiver duration_ms 9999 capped to 1000
+2026-04-17 22:11:38,635 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:MIDDLE:OFF'
+2026-04-17 22:22:22,638 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 800, 'finger': 'INDEX'}
+2026-04-17 22:22:22,844 INFO sinew.receiver GET /status -> {'connected': True, 'last_ack': 'OK:FINGER:INDEX:ON', 'watchdog_remaining_ms': 2805}
+2026-04-17 22:22:23,462 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:INDEX:OFF'
+2026-04-17 22:22:23,855 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 300, 'finger': 'PINKY'}
+2026-04-17 22:22:24,179 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:PINKY:OFF'
+2026-04-17 22:22:24,487 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 1000, 'finger': 'INDEX'}
+2026-04-17 22:22:24,593 INFO sinew.receiver POST /stop
+2026-04-17 22:22:24,600 INFO sinew.receiver pulse tail for INDEX aborted during sleep
+2026-04-17 22:22:24,900 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'finger': 'THUMB'}
+2026-04-17 22:22:24,903 INFO sinew.receiver POST /stimulate body={'action': 'FIRE', 'finger': 'INDEX'}
+2026-04-17 22:22:24,906 INFO sinew.receiver POST /stimulate body={'action': 'ON', 'duration_ms': 9999, 'finger': 'MIDDLE'}
+2026-04-17 22:22:24,906 WARNING sinew.receiver duration_ms 9999 capped to 1000
+2026-04-17 22:22:25,929 INFO sinew.receiver pulse tail auto-off ack='OK:FINGER:MIDDLE:OFF'
