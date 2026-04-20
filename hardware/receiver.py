@@ -1,0 +1,414 @@
+"""
+Flask bridge between the app layer and Arduino firmware.
+Translates HTTP requests to serial commands on port 5001.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+import threading
+import time
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Optional
+
+import serial
+from flask import Flask, jsonify, request
+from serial.tools import list_ports
+
+# Make the repo root importable so app.state resolves when we run this file
+# directly from the hardware/ directory.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from app.state import Action, Finger  # noqa: E402
+
+# -----------------------------------------------------------------------------
+# Constants
+# -----------------------------------------------------------------------------
+
+ARDUINO_VID = 0x2341  # Arduino SA / Arduino LLC
+BAUD = 115200
+READY_TIMEOUT_S = 5.0
+ACK_TIMEOUT_S = 0.5
+MAX_DURATION_MS = 1000  # validator in brain.py also caps this
+WATCHDOG_WINDOW_MS = 3000  # must match firmware WATCHDOG_MS
+PULSE_POLL_INTERVAL_S = 0.05  # how often phase B checks the abort event
+
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+LOG_FILE = LOG_DIR / "receiver.log"
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+log = logging.getLogger("monday.receiver")
+log.setLevel(logging.INFO)
+_handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3)
+_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+)
+log.addHandler(_handler)
+_console = logging.StreamHandler()
+_console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+log.addHandler(_console)
+
+
+# -----------------------------------------------------------------------------
+# Serial wrapper
+# -----------------------------------------------------------------------------
+
+
+class SerialLink:
+    """Thread-safe wrapper around the pyserial port."""
+
+    def __init__(self) -> None:
+        self._port: Optional[serial.Serial] = None
+        self._port_path: Optional[str] = None
+        self._cmd_lock = threading.Lock()
+        self._wire_lock = threading.Lock()
+        self._last_ack: str = ""
+        self._last_send_ms: int = 0
+        self._pending_drain: int = 0
+        self._drain_lock = threading.Lock()
+
+    # ------------------------ connection management ------------------------
+
+    @staticmethod
+    def _detect_port() -> Optional[str]:
+        override = os.environ.get("MONDAY_SERIAL_PORT")
+        if override:
+            log.info("serial port override from env: %s", override)
+            return override
+        for p in list_ports.comports():
+            if p.vid == ARDUINO_VID:
+                log.info("found Arduino at %s vid=0x%04x pid=0x%04x", p.device, p.vid, p.pid or 0)
+                return p.device
+        log.warning("no Arduino found by VID 0x%04x", ARDUINO_VID)
+        return None
+
+    def connect(self) -> bool:
+        path = self._detect_port()
+        if path is None:
+            return False
+        try:
+            port = serial.Serial(path, BAUD, timeout=READY_TIMEOUT_S)
+        except serial.SerialException as e:
+            log.error("failed to open %s: %s", path, e)
+            return False
+
+        time.sleep(0.2)  # Arduino Micro DTR reset settle
+        banner = self._read_line(port, timeout_s=READY_TIMEOUT_S)
+        if banner != "READY":
+            log.error("expected READY, got %r on %s", banner, path)
+            try:
+                port.close()
+            except Exception:
+                pass
+            return False
+
+        self._port = port
+        self._port_path = path
+        self._last_ack = "READY"
+        self._last_send_ms = self._now_ms()
+        with self._drain_lock:
+            self._pending_drain = 0
+        log.info("connected to %s, firmware READY", path)
+        return True
+
+    def _close_quiet(self) -> None:
+        if self._port is not None:
+            try:
+                self._port.close()
+            except Exception:
+                pass
+        self._port = None
+
+    def is_connected(self) -> bool:
+        return self._port is not None and self._port.is_open
+
+    # ------------------------ core IO ------------------------
+
+    @staticmethod
+    def _now_ms() -> int:
+        return int(time.time() * 1000)
+
+    @staticmethod
+    def _read_line(port: serial.Serial, timeout_s: float) -> str:
+        port.timeout = timeout_s
+        raw = port.readline()
+        if not raw:
+            return ""
+        return raw.decode("ascii", errors="replace").strip()
+
+    def _drain_pending(self) -> None:
+        """Drain stale ACKs from priority writes. Caller must hold _cmd_lock."""
+        assert self._port is not None
+        with self._drain_lock:
+            n = self._pending_drain
+            self._pending_drain = 0
+        for _ in range(n):
+            line = self._read_line(self._port, ACK_TIMEOUT_S)
+            if line:
+                log.info("drained stale ack: %r", line)
+                self._last_ack = line
+        # Opportunistic drain of any other pending lines (TIMEOUT, WATCHDOG).
+        while self._port.in_waiting > 0:
+            line = self._read_line(self._port, 0.05)
+            if not line:
+                break
+            log.info("drained async: %r", line)
+            self._last_ack = line
+
+    def _write_and_ack(self, command: str) -> str:
+        """Caller must hold _cmd_lock. Raises SerialException on IO error."""
+        assert self._port is not None
+        self._drain_pending()
+        line = (command + "\n").encode("ascii")
+        with self._wire_lock:
+            self._port.write(line)
+            self._port.flush()
+        ack = self._read_line(self._port, ACK_TIMEOUT_S)
+        self._last_send_ms = self._now_ms()
+        if ack:
+            self._last_ack = ack
+        log.info("serial tx=%r rx=%r", command, ack)
+        return ack
+
+    def send(self, command: str) -> str:
+        """Public send with auto reconnect. Acquires _cmd_lock for the full roundtrip."""
+        with self._cmd_lock:
+            try:
+                if not self.is_connected():
+                    raise serial.SerialException("port not open")
+                ack = self._write_and_ack(command)
+                if ack == "":
+                    raise serial.SerialException("empty ack")
+                return ack
+            except serial.SerialException as first_err:
+                log.warning("first attempt failed for %r: %s, reconnecting", command, first_err)
+                self._close_quiet()
+                if not self._reconnect_locked():
+                    raise
+                try:
+                    ack = self._write_and_ack(command)
+                    if ack == "":
+                        raise serial.SerialException("empty ack after reconnect")
+                    return ack
+                except serial.SerialException as second_err:
+                    log.error("retry failed for %r: %s", command, second_err)
+                    self._close_quiet()
+                    raise
+
+    def priority_write(self, command: str) -> bool:
+        """Fire-and-forget write for /stop. Skips _cmd_lock."""
+        if not self.is_connected():
+            log.error("priority_write %r skipped: port not open", command)
+            return False
+        line = (command + "\n").encode("ascii")
+        try:
+            with self._wire_lock:
+                assert self._port is not None
+                self._port.write(line)
+                self._port.flush()
+            with self._drain_lock:
+                self._pending_drain += 1
+            self._last_send_ms = self._now_ms()
+            log.info("priority tx=%r", command)
+            return True
+        except serial.SerialException as e:
+            log.error("priority_write %r failed: %s", command, e)
+            return False
+
+    def _reconnect_locked(self) -> bool:
+        """Same as connect() but assumes the caller holds _cmd_lock."""
+        path = self._detect_port()
+        if path is None:
+            return False
+        try:
+            port = serial.Serial(path, BAUD, timeout=READY_TIMEOUT_S)
+        except serial.SerialException as e:
+            log.error("reconnect open %s failed: %s", path, e)
+            return False
+        time.sleep(0.2)
+        banner = self._read_line(port, timeout_s=READY_TIMEOUT_S)
+        if banner != "READY":
+            log.error("reconnect banner wrong: %r", banner)
+            try:
+                port.close()
+            except Exception:
+                pass
+            return False
+        self._port = port
+        self._port_path = path
+        self._last_ack = "READY"
+        self._last_send_ms = self._now_ms()
+        with self._drain_lock:
+            self._pending_drain = 0
+        log.info("reconnected to %s", path)
+        return True
+
+    # ------------------------ status ------------------------
+
+    def snapshot(self) -> dict:
+        remaining = WATCHDOG_WINDOW_MS - (self._now_ms() - self._last_send_ms)
+        if remaining < 0:
+            remaining = 0
+        return {
+            "connected": self.is_connected(),
+            "last_ack": self._last_ack,
+            "watchdog_remaining_ms": remaining,
+        }
+
+
+# -----------------------------------------------------------------------------
+# Flask app
+# -----------------------------------------------------------------------------
+
+
+def create_app(link: Optional["SerialLink"] = None, auto_connect: bool = True) -> Flask:
+    app = Flask(__name__)
+    if link is None:
+        link = SerialLink()
+        if auto_connect and not link.connect():
+            log.warning("serial not connected at startup, will retry on first request")
+    abort_pulse = threading.Event()
+
+    app.config["MONDAY_LINK"] = link
+    app.config["MONDAY_ABORT"] = abort_pulse
+
+    # ------------------------ /health ------------------------
+
+    @app.get("/health")
+    def health():
+        log.info("GET /health")
+        return jsonify({"alive": True}), 200
+
+    # ------------------------ /status ------------------------
+
+    @app.get("/status")
+    def status():
+        snap = link.snapshot()
+        log.info("GET /status -> %s", snap)
+        return jsonify(snap), 200
+
+    # ------------------------ /stop ------------------------
+
+    @app.post("/stop")
+    def stop():
+        log.info("POST /stop")
+        # Signal any sleeping timed pulse to abort its auto-OFF first, so the
+        # pulse's phase C is guaranteed to see the flag before ALL:OFF lands.
+        abort_pulse.set()
+        ok = link.priority_write("ALL:OFF")
+        if not ok:
+            return jsonify({"status": "error", "reason": "serial not open"}), 503
+        return jsonify({"status": "ok"}), 200
+
+    # ------------------------ /stimulate ------------------------
+
+    @app.post("/stimulate")
+    def stimulate():
+        body = request.get_json(silent=True) or {}
+        log.info("POST /stimulate body=%s", body)
+
+        finger_raw = body.get("finger")
+        action_raw = body.get("action")
+        duration_ms = body.get("duration_ms")
+
+        try:
+            finger = Finger(finger_raw)
+        except ValueError:
+            return jsonify({"status": "error", "reason": f"bad finger: {finger_raw!r}"}), 400
+        try:
+            action = Action(action_raw)
+        except ValueError:
+            return jsonify({"status": "error", "reason": f"bad action: {action_raw!r}"}), 400
+
+        if duration_ms is not None:
+            if not isinstance(duration_ms, int) or isinstance(duration_ms, bool):
+                return jsonify({"status": "error", "reason": "duration_ms must be int"}), 400
+            if duration_ms < 0:
+                return jsonify({"status": "error", "reason": "duration_ms must be >= 0"}), 400
+            if duration_ms > MAX_DURATION_MS:
+                log.warning("duration_ms %d capped to %d", duration_ms, MAX_DURATION_MS)
+                duration_ms = MAX_DURATION_MS
+
+        # A fresh /stimulate clears any lingering abort from a prior /stop.
+        # The clear happens before phase A so the pulse starts clean.
+        abort_pulse.clear()
+
+        on_cmd = f"FINGER:{finger.value}:{action.value}"
+
+        # ---- Phase A: locked ON write + ACK ----
+        try:
+            ack = link.send(on_cmd)
+        except serial.SerialException as e:
+            log.error("/stimulate phase A serial error: %s", e)
+            return jsonify({"status": "error", "reason": f"serial: {e}"}), 503
+
+        # ---- Phases B and C only apply to timed ON pulses ----
+        if action is Action.ON and duration_ms is not None and duration_ms > 0:
+            # Phase B runs in a background thread so the HTTP response can
+            # return immediately with the phase A ACK. The firmware's 2 s per
+            # finger cap is the ultimate backstop for this auto-OFF.
+            t = threading.Thread(
+                target=_run_pulse_tail,
+                args=(link, finger, duration_ms, abort_pulse),
+                daemon=True,
+                name=f"pulse-tail-{finger.value}",
+            )
+            t.start()
+
+        return jsonify({"status": "ok", "ack": ack}), 200
+
+    return app
+
+
+def _run_pulse_tail(
+    link: SerialLink,
+    finger: Finger,
+    duration_ms: int,
+    abort: threading.Event,
+) -> None:
+    """Sleep for duration then send auto-OFF. Abortable via event."""
+    deadline = time.monotonic() + (duration_ms / 1000.0)
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        if abort.is_set():
+            log.info("pulse tail for %s aborted during sleep", finger.value)
+            return
+        remaining = deadline - now
+        time.sleep(min(PULSE_POLL_INTERVAL_S, remaining))
+
+    if abort.is_set():
+        log.info("pulse tail for %s aborted before phase C", finger.value)
+        return
+
+    off_cmd = f"FINGER:{finger.value}:OFF"
+    try:
+        off_ack = link.send(off_cmd)
+        log.info("pulse tail auto-off ack=%r", off_ack)
+    except serial.SerialException as e:
+        # Firmware per finger cap (2 s) will force OFF. Safe to swallow.
+        log.error("pulse tail auto-off failed: %s, firmware cap will handle it", e)
+
+
+# -----------------------------------------------------------------------------
+# Entrypoint
+# -----------------------------------------------------------------------------
+
+
+if __name__ == "__main__":
+    app = create_app()
+    # threaded=True so /stop can run while /stimulate's phase A is writing.
+    # Serial IO is protected by SerialLink's own locks.
+    host = os.environ.get("MONDAY_RECEIVER_HOST", "0.0.0.0")
+    app.run(host=host, port=5001, threaded=True)
