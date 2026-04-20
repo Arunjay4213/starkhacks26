@@ -1,0 +1,17 @@
+# Pi-only dependencies for the wearable-case services.
+# Laptop-side deps (anthropic, faster-whisper, pyttsx3, PyQt5, etc.) live
+# in the top-level requirements.txt and are not needed here.
+#
+# Install on the Pi:
+#   pip install -r pi/requirements.txt
+#
+# On aarch64 the opencv-python pip wheel is slow and sometimes fails.
+# Prefer the apt package instead:
+#   sudo apt install python3-opencv libatlas-base-dev
+# and drop opencv-python from this file if it keeps failing.
+
+flask>=3.0
+pyserial>=3.5
+opencv-python>=4.8
+numpy>=1.24
+sounddevice>=0.4
